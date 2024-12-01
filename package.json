@@ -5,7 +5,8 @@
   "scripts": {
     "start": "ts-node src/index.ts",
     "build": "tsc",
-    "separate": "ts-node src/scripts/separate/index.ts"
+    "separate": "ts-node src/scripts/separate/index.ts",
+    "ocr": "ts-node src/scripts/ocr/index.ts"
   },
   "keywords": [],
   "author": "",

@@ -1,52 +1,15 @@
-import { PDFDocument, rgb, PDFArray, PDFDict, PDFName, PDFNumber, PDFObject, PDFRef } from 'pdf-lib';
+import { PDFDocument } from 'pdf-lib';
 import * as fs from 'fs';
 import * as path from 'path';
 
 interface SeparationConfig {
   inputPath: string;
   outputBasePath: string;
-}
-
-async function findBlankBoundaryUsingAnnotations(pdfDoc: PDFDocument, pageIndex: number): Promise<number> {
-  const page = pdfDoc.getPages()[pageIndex];
-  const { width } = page.getSize();
-
-  // アノテーションまたは他の要素からテキスト位置を取得
-  const annotsKey = PDFName.of('Annots');
-  const annotationsRef = page.node.get(annotsKey) as PDFRef | undefined;
-  if (!annotationsRef) {
-    return width / 2; // アノテーションがない場合は中央を返す
-  }
-
-  const annotations = page.node.context.lookup(annotationsRef, PDFArray) as PDFArray | undefined;
-  if (!annotations) {
-    return width / 2;
-  }
-
-  let minX = width;
-  let maxX = 0;
-
-  for (let i = 0; i < annotations.size(); i++) {
-    const annotationRef = annotations.get(i) as PDFRef;
-    const annotationDict = page.node.context.lookup(annotationRef, PDFDict) as PDFDict;
-    if (annotationDict) {
-      const rectKey = PDFName.of('Rect');
-      const rect = annotationDict.lookup(rectKey, PDFArray) as PDFArray;
-      if (rect) {
-        const x1 = rect.lookup(0, PDFNumber).asNumber();
-        const x2 = rect.lookup(2, PDFNumber).asNumber();
-        if (x1 < minX) minX = x1;
-        if (x2 > maxX) maxX = x2;
-      }
-    }
-  }
-
-  // 左側と右側の空白の中心を分割位置として返す
-  return (minX + maxX) / 2;
+  splitRatio: number; // 0から1の間の数値（例：0.4は40:60の分割）
 }
 
 async function separatePDF(config: SeparationConfig) {
-  const { inputPath, outputBasePath } = config;
+  const { inputPath, outputBasePath, splitRatio } = config;
 
   // 出力ディレクトリの作成
   const receiptDir = path.join(outputBasePath, 'receipt');
@@ -72,9 +35,9 @@ async function separatePDF(config: SeparationConfig) {
     const page = inputPdf.getPages()[i];
     const { width, height } = page.getSize();
 
-    // 空白の境界をアノテーションを基に検出
-    const splitPosition = await findBlankBoundaryUsingAnnotations(inputPdf, i);
-    console.log(`Found blank boundary at: ${(splitPosition / width * 100).toFixed(1)}%`);
+    // 指定された比率で分割位置を計算
+    const splitPosition = width * splitRatio;
+    console.log(`Splitting at: ${(splitRatio * 100).toFixed(1)}% (${splitPosition.toFixed(1)} units)`);
 
     // レシート（左側）のPDF生成
     const receiptPdf = await PDFDocument.create();
@@ -118,7 +81,8 @@ async function separatePDF(config: SeparationConfig) {
 // 使用例
 const config: SeparationConfig = {
   inputPath: path.join(__dirname, '../../../data/original/1129_receipt_100.pdf'),
-  outputBasePath: path.join(__dirname, '../../../data/outputs/1129_receipt_100'),
+  outputBasePath: path.join(__dirname, '../../../data/original/separate/1129_receipt_100'),
+  splitRatio: 0.454, // 左(領収書)の比率
 };
 
 separatePDF(config).catch(console.error);

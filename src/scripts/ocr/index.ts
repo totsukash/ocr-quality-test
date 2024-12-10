@@ -2,8 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
 import dotenv from 'dotenv';
+import pLimit from 'p-limit';
 
-// プロジェクトルートの.envを読み込む
 dotenv.config({ path: path.join(__dirname, '../../../.env') });
 
 interface ReceiptData {
@@ -46,7 +46,14 @@ const schema = {
           description: 'インボイス登録番号',
         },
       },
-      required: ['date', 'store_name', 'total_amount', 'tax_8_amount', 'tax_10_amount', 'invoice_number'],
+      required: [
+        'date',
+        'store_name',
+        'total_amount',
+        'tax_8_amount',
+        'tax_10_amount',
+        'invoice_number',
+      ],
     },
   },
   required: ['receipt'],
@@ -112,8 +119,6 @@ async function processOCR(inputPath: string, limit?: number): Promise<Map<string
 
   try {
     const files = await fs.promises.readdir(inputPath);
-
-    // PDF または PNG ファイルをフィルタリングしてソート
     const targetFiles = files
       .filter(file => file.toLowerCase().endsWith('.pdf') || file.toLowerCase().endsWith('.png'))
       .sort((a, b) => {
@@ -122,19 +127,44 @@ async function processOCR(inputPath: string, limit?: number): Promise<Map<string
         return numA - numB;
       });
 
-    // 処理件数を制限（指定がある場合）
     const filesToProcess = limit ? targetFiles.slice(0, limit) : targetFiles;
-
     console.log(`Processing ${filesToProcess.length} files...`);
 
-    // 各ファイルに対してOCR処理を実行
-    for (const file of filesToProcess) {
-      const originalName = path.parse(file).name;
-      const filePath = path.join(inputPath, file);
+    // Create chunks of 50 files
+    const chunks = [];
+    for (let i = 0; i < filesToProcess.length; i += 50) {
+      chunks.push(filesToProcess.slice(i, i + 50));
+    }
 
-      console.log(`Processing file: ${file}`);
-      const ocrResult = await analyzeImage(filePath);
-      results.set(originalName, ocrResult);
+    // Process chunks with rate limiting
+    const rateLimiter = pLimit(1); // Only process one chunk at a time
+    for (const [index, chunk] of chunks.entries()) {
+      console.log(`Processing chunk ${index + 1} of ${chunks.length}`);
+
+      // Process files within chunk in parallel
+      const chunkLimit = pLimit(50); // Process up to 50 files simultaneously within chunk
+      const chunkPromises = chunk.map(file => {
+        const originalName = path.parse(file).name;
+        const filePath = path.join(inputPath, file);
+
+        return chunkLimit(() => analyzeImage(filePath)
+          .then(result => {
+            results.set(originalName, result);
+            console.log(`Processed file: ${file}`);
+          })
+          .catch(error => {
+            console.error(`Error processing ${file}:`, error);
+          }));
+      });
+
+      // Wait for current chunk to complete
+      await rateLimiter(() => Promise.all(chunkPromises));
+
+      // Wait for 1 minute before processing next chunk
+      if (index < chunks.length - 1) {
+        console.log('Waiting 1 minute before processing next chunk...');
+        await new Promise(resolve => setTimeout(resolve, 60000));
+      }
     }
 
   } catch (error) {
@@ -165,10 +195,7 @@ async function saveOCRResults(results: Map<string, ReceiptData>): Promise<void> 
   };
 
   const now = new Date();
-  const date = formatDate(now);
-  const time = formatTime(now);
-  const timestamp = `${date}_${time}`;
-
+  const timestamp = `${formatDate(now)}_${formatTime(now)}`;
   const outputDir = path.join(__dirname, '..', '..', '..', 'data', 'outputs', 'ocr', timestamp);
 
   await fs.promises.mkdir(outputDir, { recursive: true });
@@ -192,13 +219,9 @@ async function saveOCRResults(results: Map<string, ReceiptData>): Promise<void> 
 
 async function main() {
   try {
-    const inputDir = path.join(__dirname, '..', '..', '..', 'data', 'original', 'separate', '1129_receipt_100', 'receipt');
-
-    // 実行する件数はここで指定
+    const inputDir = path.join(__dirname, '..', '..', '..', 'data', 'original', 'separate', '領収書_あさの4', 'receipt');
     const results = await processOCR(inputDir, 100);
-
     await saveOCRResults(results);
-
     console.log('OCR processing completed successfully');
   } catch (error) {
     console.error('Error during OCR processing:', error);

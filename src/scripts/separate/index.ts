@@ -79,10 +79,11 @@ async function separatePDF(config: SeparationConfig) {
 }
 
 // 使用例
+const fileName = '領収書_あさの4'
 const config: SeparationConfig = {
-  inputPath: path.join(__dirname, '../../../data/original/1129_receipt_100.pdf'),
-  outputBasePath: path.join(__dirname, '../../../data/original/separate/1129_receipt_100'),
-  splitRatio: 0.454, // 左(領収書)の比率
+  inputPath: path.join(__dirname, `../../../data/original/${fileName}.pdf`),
+  outputBasePath: path.join(__dirname, `../../../data/original/separate/${fileName}`),
+  splitRatio: 0.454,
 };
 
 separatePDF(config).catch(console.error);

@@ -6,6 +6,10 @@ import pLimit from 'p-limit';
 
 dotenv.config({ path: path.join(__dirname, '../../../.env') });
 
+const MODEL_NAME = 'gemini-1.5-pro-002';
+
+// const MODEL_NAME = 'gemini-exp-1206';
+
 interface ReceiptData {
   date: string;
   store_name: string;
@@ -59,55 +63,115 @@ const schema = {
   required: ['receipt'],
 };
 
-const prompt = `
-この画像は領収書です。領収書から以下の情報を抽出してください：
+// 画像→テキスト抽出用プロンプト
+const textExtractionPrompt = `
+この画像は領収書/レシートです。画像を読み取って、領収書に記載された全てのテキスト情報を出力してください。
+読み取れた情報を正確にテキスト化してください。
 
-- 日付
-- 店舗名、会社名
-- 合計金額
-- 8%税率対象額
-- 10%税率対象額
-- インボイス登録番号
+テキストの出力は改行を含めるなど、今後あなたが最も理解しやすい形式で出力してください。
 
-# 以下のルールは厳守してください
-- 絶対に読み取りミスをせず、正しく読み取ってください。
-- 読み取れないものは空欄にしてください。
-- 金額は数値で返してください（カンマや円マークは不要です）。
-- 日付は YYYY-MM-DD 形式で返してください。
-  - 例: 2022-01-01
-  - "6年"などの表記は令和6年の日付として扱ってください。
+最終的には以下の情報を取得したいです。
+この辺の情報は注意深く読み取ってください。
+
+手書きの領収書の場合、金額の前に「¥」が付いていることがあります。金額の前に「¥」がある場合は削除して、数値のみを抽出してください。
+「¥」を数字の7や9と誤認識しないように注意してください。
+
+以下のような表記は全て和暦の「令和」として扱ってください。
+- 6年 のような1桁の年数
+- R6 のようなR+1桁の年数(数字の9と勘違いしないでください。96年のような表記はありません)
+- R和6 のようなR和+1桁の年数
+
+- data: 日付（YYYY-MM-DD形式、"6年"などは令和6年の日付として扱う）
+- store_name: 店舗名、会社名: なるべく正確に。店舗名と会社名の両方ある場合は、店舗名を優先してください。
+- total_amount: 合計金額
+- tax_8_amount: 8%税率対象額（数値）
+- tax_10_amount: 10%税率対象額（数値）
+- invoice_number: インボイス登録番号(Tから始まる英数字)
 `;
+
+// テキスト→JSON生成用プロンプト関数
+const jsonConversionPrompt = (extractedText: string) => `
+以下は領収書から抽出したテキストです。
+このテキストを元に、以下の情報を指定したJSON形式で抽出してください。
+
+- data: 日付（YYYY-MM-DD形式、"6年","R6"などは令和6年の日付として扱う）
+  - 令和1年(令和元年): 2019年
+  - 令和2年: 2020年
+  - 令和3年: 2021年
+  - 令和4年: 2022年
+  - 令和5年: 2023年
+  - 令和6年: 2024年
+  - 令和7年: 2025年
+  - 令和8年: 2026年
+  - 令和9年: 2027年
+  - 令和10年: 2028年
+- store_name: 店舗名、会社名: なるべく正確に。店舗名と会社名の両方ある場合は、店舗名を優先してください。
+- total_amount: 合計金額（数値、カンマ・単位(円)なし・「¥」などの記号なし）
+- tax_8_amount: 8%税率対象額（数値）
+- tax_10_amount: 10%税率対象額（数値）
+- invoice_number: インボイス登録番号(Tから始まる英数字, ハイフンなし。Tと数字のみ。スペースなし)
+
+抽出結果を必ずスキーマに従いJSONで出力してください。読み取れない項目は空文字にしてください。
+
+抽出元テキスト:
+${extractedText}
+`;
+
+async function extractTextFromImage(filePath: string): Promise<string> {
+  const buffer = await fs.promises.readFile(filePath);
+  const base64Image = buffer.toString('base64');
+  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
+  const model = genAI.getGenerativeModel({
+    model: MODEL_NAME,
+    generationConfig: {
+      temperature: 0,
+    },
+  });
+
+  const mimeType = filePath.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/png';
+
+  const result = await model.generateContent([
+    {
+      inlineData: {
+        mimeType: mimeType,
+        data: base64Image
+      }
+    },
+    { text: textExtractionPrompt }
+  ]);
+
+  const extractedText = result.response.text();
+  console.log('Extracted text:', extractedText);
+  return extractedText;
+}
+
+async function convertTextToJSON(extractedText: string): Promise<ReceiptData> {
+  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
+  const model = genAI.getGenerativeModel({
+    model: MODEL_NAME,
+    generationConfig: {
+      temperature: 0,
+      responseMimeType: "application/json",
+      responseSchema: schema,
+    },
+  });
+
+  const prompt = jsonConversionPrompt(extractedText);
+
+  const result = await model.generateContent([
+    { text: prompt }
+  ]);
+  const responseText = result.response.text();
+  const parsedData = JSON.parse(responseText);
+  return parsedData.receipt;
+}
 
 async function analyzeImage(filePath: string): Promise<ReceiptData> {
   try {
-    const buffer = await fs.promises.readFile(filePath);
-    const base64Image = buffer.toString('base64');
-
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
-    const model = genAI.getGenerativeModel({
-      model: "gemini-1.5-pro-002",
-      generationConfig: {
-        temperature: 0.1,
-        responseMimeType: "application/json",
-        responseSchema: schema,
-      },
-    });
-
-    const mimeType = filePath.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/png';
-
-    const result = await model.generateContent([
-      {
-        inlineData: {
-          mimeType: mimeType,
-          data: base64Image
-        }
-      },
-      { text: prompt },
-    ]);
-
-    const responseText = await result.response.text();
-    const parsedData = JSON.parse(responseText);
-    return parsedData.receipt;
+    // 1: 画像からテキスト抽出
+    const extractedText = await extractTextFromImage(filePath);
+    // 2: テキストからJSON生成
+    return await convertTextToJSON(extractedText);
   } catch (error) {
     console.error('Image analysis error:', error);
     throw new Error(`領収書の解析中にエラーが発生しました: ${error}`);
@@ -128,21 +192,20 @@ async function processOCR(inputPath: string, limit?: number): Promise<Map<string
       });
 
     const filesToProcess = limit ? targetFiles.slice(0, limit) : targetFiles;
-    console.log(`Processing ${filesToProcess.length} files...`);
+    console.log(`Processing ${filesToProcess.length} files in directory: ${inputPath}`);
 
-    // Create chunks of 50 files
+    // 50件ずつのチャンクに分けて処理
     const chunks = [];
     for (let i = 0; i < filesToProcess.length; i += 50) {
       chunks.push(filesToProcess.slice(i, i + 50));
     }
 
-    // Process chunks with rate limiting
-    const rateLimiter = pLimit(1); // Only process one chunk at a time
+    // チャンクごとに処理
+    const rateLimiter = pLimit(1); // chunk単位で1回ずつ処理
     for (const [index, chunk] of chunks.entries()) {
-      console.log(`Processing chunk ${index + 1} of ${chunks.length}`);
+      console.log(`Processing chunk ${index + 1} of ${chunks.length} in directory: ${inputPath}`);
 
-      // Process files within chunk in parallel
-      const chunkLimit = pLimit(50); // Process up to 50 files simultaneously within chunk
+      const chunkLimit = pLimit(50); // chunk内50並列
       const chunkPromises = chunk.map(file => {
         const originalName = path.parse(file).name;
         const filePath = path.join(inputPath, file);
@@ -157,10 +220,10 @@ async function processOCR(inputPath: string, limit?: number): Promise<Map<string
           }));
       });
 
-      // Wait for current chunk to complete
+      // chunk完了待機
       await rateLimiter(() => Promise.all(chunkPromises));
 
-      // Wait for 1 minute before processing next chunk
+      // 次のchunk前に1分待つ
       if (index < chunks.length - 1) {
         console.log('Waiting 1 minute before processing next chunk...');
         await new Promise(resolve => setTimeout(resolve, 60000));
@@ -175,29 +238,8 @@ async function processOCR(inputPath: string, limit?: number): Promise<Map<string
   return results;
 }
 
-async function saveOCRResults(results: Map<string, ReceiptData>): Promise<void> {
-  const formatDate = (date: Date): string => {
-    return date.toLocaleString('ja-JP', {
-      timeZone: 'Asia/Tokyo',
-      day: '2-digit',
-      month: '2-digit'
-    }).replace(/[\/]/g, '');
-  };
-
-  const formatTime = (date: Date): string => {
-    return date.toLocaleString('ja-JP', {
-      timeZone: 'Asia/Tokyo',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    }).replace(/[:]/g, '');
-  };
-
-  const now = new Date();
-  const timestamp = `${formatDate(now)}_${formatTime(now)}`;
-  const outputDir = path.join(__dirname, '..', '..', '..', 'data', 'outputs', 'ocr', timestamp);
-
+async function saveOCRResults(results: Map<string, ReceiptData>, dirName: string): Promise<void> {
+  const outputDir = path.join(__dirname, '..', '..', '..', 'data', 'outputs', 'ocr', dirName);
   await fs.promises.mkdir(outputDir, { recursive: true });
 
   for (const [fileName, data] of results.entries()) {
@@ -219,10 +261,17 @@ async function saveOCRResults(results: Map<string, ReceiptData>): Promise<void> 
 
 async function main() {
   try {
-    const inputDir = path.join(__dirname, '..', '..', '..', 'data', 'original', 'separate', '領収書_あさの4', 'receipt');
-    const results = await processOCR(inputDir, 100);
-    await saveOCRResults(results);
-    console.log('OCR processing completed successfully');
+    const directories = [
+      '領収書_SEED1',
+    ];
+
+    for (const dirName of directories) {
+      const inputDir = path.join(__dirname, '..', '..', '..', 'data', 'original', 'separate', dirName, 'receipt');
+      const results = await processOCR(inputDir, 100);
+      await saveOCRResults(results, dirName);
+      console.log(`OCR processing completed successfully for directory: ${dirName}`);
+    }
+
   } catch (error) {
     console.error('Error during OCR processing:', error);
     process.exit(1);
@@ -230,7 +279,7 @@ async function main() {
 }
 
 if (require.main === module) {
-  main();
+  main().then();
 }
 
 export { processOCR, saveOCRResults, ReceiptData };

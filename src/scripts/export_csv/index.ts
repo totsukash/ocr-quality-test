@@ -3,14 +3,14 @@ import path from 'path';
 
 // ディレクトリとファイルパスの設定
 const CONFIG = {
-  outputsDir: './outputs/ocr/領収書_ZON3',
-  evaluateDir: './evaluate/領収書_ZON3',
+  outputsDir: '/Users/totsuka/github.com/totsukash/ocr-quality-test/data/outputs/ocr/領収書_ZON3',
+  evaluateDir: '/Users/totsuka/github.com/totsukash/ocr-quality-test/data/evaluate/領収書_ZON3',
   outputCsvPath: './comparison_results.csv'
 } as const;
 
 // 比較結果を表す記号の定義
 const COMPARISON_SYMBOLS = {
-  MATCH: '⭕️',
+  MATCH: '✅',
   MISMATCH: '❌'
 } as const;
 
@@ -81,11 +81,11 @@ class ReceiptComparator {
   }
 
   private generateCsv(rows: ComparisonRow[]): string {
-    const headers = ['file_name', 'field', 'outputs_value', 'evaluate_value', 'comparison_result'];
+    const headers = ['番号', '項目', 'AI読み取りデータ', '正解データ', '結果(完全一致)'];
     const csvRows = [
       headers.join(','),
       ...rows.map(row => [
-        `"${row.file_name}"`,
+        `"${row.file_name.replace('.json', '')}"`,
         `"${row.field}"`,
         `"${row.outputs_value}"`,
         `"${row.evaluate_value}"`,

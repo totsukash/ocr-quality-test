@@ -9,8 +9,13 @@ const { VertexAI } = require('@google-cloud/vertexai');
 
 const project = 'omni-workspace-develop';
 const location = 'us-central1';
+// const textModel = "gemini-2.0-flash-exp";
 const textModel = "gemini-1.5-pro-002";
-export const bucketName = "test-taxbiz-ocr";
+const bucketName = "test-taxbiz-ocr";
+const dirName = "領収書_ZON3/receipt";
+const maxFiles = 100;  // 処理する最大ファイル数
+const BATCH_SIZE = 50;  // 1バッチあたりの処理数
+const RATE_LIMIT_WINDOW = 60000;  // レートリミットのウィンドウ (1分 = 60000ms)
 
 const vertexAI = new VertexAI({ project: project, location: location });
 
@@ -35,9 +40,21 @@ interface ReceiptData {
   tax_8_amount: number;
   tax_10_amount: number;
   invoice_number: string;
+  file_name: string;
 }
 
-const inferenceByGemini = async (): Promise<string> => {
+// 配列をチャンクに分割するヘルパー関数
+function chunk<T>(array: T[], size: number): T[][] {
+  return Array.from(
+    { length: Math.ceil(array.length / size) },
+    (_, i) => array.slice(i * size, i * size + size)
+  );
+}
+
+// 指定時間待機する関数
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const inferenceByGemini = async (fileName: string): Promise<string> => {
   const generativeModel = vertexAI.getGenerativeModel({
     model: textModel,
     generationConfig: {
@@ -65,8 +82,7 @@ const inferenceByGemini = async (): Promise<string> => {
     },
   });
 
-  const destFileName = "領収書_ZON3/receipt/1.pdf";
-  const gsUrl = `gs://${bucketName}/${destFileName}`;
+  const gsUrl = `gs://${bucketName}/${fileName}`;
 
   const textPart = {
     text: journalPrompt,
@@ -89,7 +105,7 @@ const inferenceByGemini = async (): Promise<string> => {
   return result.response.candidates![0].content.parts[0].text;
 }
 
-function transformToReceiptData(jsonContent: string): ReceiptData {
+function transformToReceiptData(jsonContent: string, fileName: string): ReceiptData {
   try {
     const journalEntries: JournalEntry[] = JSON.parse(jsonContent);
 
@@ -102,7 +118,6 @@ function transformToReceiptData(jsonContent: string): ReceiptData {
     const totalAmount = parseFloat(entry.借方金額) || 0;
     const tax10Amount = totalAmount - tax8Amount;
 
-    // 日付のフォーマット変換（スラッシュからハイフンへ）
     const formattedDate = entry.取引日.replace(/\//g, '-');
 
     return {
@@ -111,7 +126,8 @@ function transformToReceiptData(jsonContent: string): ReceiptData {
       total_amount: totalAmount,
       tax_8_amount: tax8Amount,
       tax_10_amount: tax10Amount,
-      invoice_number: entry.登録番号
+      invoice_number: entry.登録番号,
+      file_name: fileName
     };
   } catch (error) {
     console.error('Error transforming JSON to ReceiptData:', error);
@@ -119,14 +135,67 @@ function transformToReceiptData(jsonContent: string): ReceiptData {
   }
 }
 
-export const analyzeReceipt = async (): Promise<ReceiptData> => {
-  try {
-    const jsonContent = await inferenceByGemini();
-    return transformToReceiptData(jsonContent);
-  } catch (error) {
-    console.error('Error analyzing receipt:', error);
-    throw error;
-  }
+async function processFilesBatch(fileNames: string[]): Promise<ReceiptData[]> {
+  const batchResults = await Promise.allSettled(
+    fileNames.map(async fileName => {
+      try {
+        console.log(`Processing file: ${fileName}`);
+        const jsonContent = await inferenceByGemini(fileName);
+        const receiptData = transformToReceiptData(jsonContent, fileName);
+        console.log(`Successfully processed: ${fileName}`);
+        return receiptData;
+      } catch (error) {
+        console.error(`Error processing ${fileName}:`, error);
+        throw error;
+      }
+    })
+  );
+
+  // 成功した結果のみを返す
+  return batchResults
+    .filter((result): result is PromiseFulfilledResult<ReceiptData> => result.status === 'fulfilled')
+    .map(result => result.value);
 }
 
-analyzeReceipt().then(console.log).catch(console.error);
+export const analyzeReceipts = async (): Promise<ReceiptData[]> => {
+  // ファイル名の配列を生成
+  const fileNames = Array.from(
+    { length: maxFiles },
+    (_, i) => `${dirName}/${i + 1}.pdf`
+  );
+
+  // ファイル名をバッチサイズで分割
+  const batches = chunk(fileNames, BATCH_SIZE);
+  const allResults: ReceiptData[] = [];
+
+  console.log(`Starting processing ${fileNames.length} files in ${batches.length} batches...`);
+
+  for (let i = 0; i < batches.length; i++) {
+    console.log(`Processing batch ${i + 1}/${batches.length}`);
+    const startTime = Date.now();
+
+    const batchResults = await processFilesBatch(batches[i]);
+    allResults.push(...batchResults);
+
+    // バッチ間でレートリミットを適用
+    const elapsedTime = Date.now() - startTime;
+    if (elapsedTime < RATE_LIMIT_WINDOW && i < batches.length - 1) {
+      const waitTime = RATE_LIMIT_WINDOW - elapsedTime;
+      console.log(`Waiting ${waitTime}ms before next batch...`);
+      await wait(waitTime);
+    }
+  }
+
+  return allResults;
+}
+
+// メイン実行部分
+analyzeReceipts()
+  .then(results => {
+    console.log('All processing completed!');
+    console.log('Total processed files:', results.length);
+    console.log('Results:', JSON.stringify(results, null, 2));
+  })
+  .catch(error => {
+    console.error('Fatal error:', error);
+  });

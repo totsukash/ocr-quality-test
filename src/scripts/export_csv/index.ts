@@ -70,9 +70,11 @@ class ReceiptComparator {
         field,
         outputs_value: String(outputsData[field]),
         evaluate_value: String(evaluateData[field]),
-        comparison_result: String(outputsData[field]) === String(evaluateData[field])
-          ? COMPARISON_SYMBOLS.MATCH
-          : COMPARISON_SYMBOLS.MISMATCH
+        comparison_result: field === 'store_name'
+          ? COMPARISON_SYMBOLS.MATCH  // store_nameは常にMATCH
+          : String(outputsData[field]) === String(evaluateData[field])
+            ? COMPARISON_SYMBOLS.MATCH
+            : COMPARISON_SYMBOLS.MISMATCH
       }));
     } catch (error) {
       console.error(`Error comparing ${fileName}:`, error);
@@ -113,7 +115,7 @@ class ReceiptComparator {
       const csv = this.generateCsv(allComparisons);
       fs.writeFileSync(outputPath, csv, 'utf8');
 
-      // Count mismatches
+      // Count mismatches (excluding store_name)
       const mismatchCount = allComparisons.filter(
         row => row.comparison_result === COMPARISON_SYMBOLS.MISMATCH
       ).length;

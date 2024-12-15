@@ -2,6 +2,7 @@ import path from 'path';
 import { SchemaType } from "@google/generative-ai";
 import dotenv from 'dotenv';
 import { journalPrompt } from "./prompt";
+import fs from 'fs/promises';
 
 dotenv.config({ path: path.join(__dirname, '../../../.env') });
 
@@ -9,13 +10,13 @@ const { VertexAI } = require('@google-cloud/vertexai');
 
 const project = 'omni-workspace-develop';
 const location = 'us-central1';
-// const textModel = "gemini-2.0-flash-exp";
 const textModel = "gemini-1.5-pro-002";
 const bucketName = "test-taxbiz-ocr";
 const dirName = "領収書_ZON3/receipt";
-const maxFiles = 100;  // 処理する最大ファイル数
-const BATCH_SIZE = 50;  // 1バッチあたりの処理数
-const RATE_LIMIT_WINDOW = 60000;  // レートリミットのウィンドウ (1分 = 60000ms)
+const outputDir = "/Users/totsuka/github.com/totsukash/ocr-quality-test/data/outputs/ocr/領収書_ZON3";
+const maxFiles = 100;
+const BATCH_SIZE = 50;
+const RATE_LIMIT_WINDOW = 60000;
 
 const vertexAI = new VertexAI({ project: project, location: location });
 
@@ -33,6 +34,7 @@ interface JournalEntry {
   "8%対象金額": string;
 }
 
+// JSONとして出力される形式
 interface ReceiptData {
   date: string;
   store_name: string;
@@ -40,10 +42,13 @@ interface ReceiptData {
   tax_8_amount: number;
   tax_10_amount: number;
   invoice_number: string;
+}
+
+// 内部処理用の拡張インターフェース
+interface InternalReceiptData extends ReceiptData {
   file_name: string;
 }
 
-// 配列をチャンクに分割するヘルパー関数
 function chunk<T>(array: T[], size: number): T[][] {
   return Array.from(
     { length: Math.ceil(array.length / size) },
@@ -51,7 +56,6 @@ function chunk<T>(array: T[], size: number): T[][] {
   );
 }
 
-// 指定時間待機する関数
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const inferenceByGemini = async (fileName: string): Promise<string> => {
@@ -83,6 +87,8 @@ const inferenceByGemini = async (fileName: string): Promise<string> => {
   });
 
   const gsUrl = `gs://${bucketName}/${fileName}`;
+  // const yenGsUrl = `gs://test-taxbiz-ocr/yen.png`;
+  const yenGsUrl = `gs://test-taxbiz-ocr/yen_zon3_1.png`;
 
   const textPart = {
     text: journalPrompt,
@@ -93,11 +99,17 @@ const inferenceByGemini = async (fileName: string): Promise<string> => {
       mimeType: "application/pdf",
     },
   };
+  const yenPart = {
+    fileData: {
+      fileUri: yenGsUrl,
+      mimeType: "image/png",
+    },
+  }
 
   const request = {
     contents: [{
       role: "user",
-      parts: [filePart, textPart],
+      parts: [yenPart, filePart, textPart],
     }],
   };
 
@@ -105,7 +117,7 @@ const inferenceByGemini = async (fileName: string): Promise<string> => {
   return result.response.candidates![0].content.parts[0].text;
 }
 
-function transformToReceiptData(jsonContent: string, fileName: string): ReceiptData {
+function transformToReceiptData(jsonContent: string, fileName: string): InternalReceiptData {
   try {
     const journalEntries: JournalEntry[] = JSON.parse(jsonContent);
 
@@ -135,13 +147,38 @@ function transformToReceiptData(jsonContent: string, fileName: string): ReceiptD
   }
 }
 
-async function processFilesBatch(fileNames: string[]): Promise<ReceiptData[]> {
+async function saveReceiptToJson(receipt: InternalReceiptData, outputDir: string): Promise<void> {
+  try {
+    await fs.mkdir(outputDir, { recursive: true });
+
+    const fileNumber = path.basename(receipt.file_name, '.pdf');
+    const outputPath = path.join(outputDir, `${fileNumber}.json`);
+
+    // file_nameを除外したデータを保存
+    const { file_name, ...receiptDataWithoutFileName } = receipt;
+
+    await fs.writeFile(
+      outputPath,
+      JSON.stringify(receiptDataWithoutFileName, null, 2),
+      'utf-8'
+    );
+    console.log(`Receipt data saved to: ${outputPath}`);
+  } catch (error) {
+    console.error(`Error saving receipt to JSON (${receipt.file_name}):`, error);
+    throw error;
+  }
+}
+
+async function processFilesBatch(fileNames: string[], outputDir: string): Promise<InternalReceiptData[]> {
   const batchResults = await Promise.allSettled(
     fileNames.map(async fileName => {
       try {
         console.log(`Processing file: ${fileName}`);
         const jsonContent = await inferenceByGemini(fileName);
         const receiptData = transformToReceiptData(jsonContent, fileName);
+
+        await saveReceiptToJson(receiptData, outputDir);
+
         console.log(`Successfully processed: ${fileName}`);
         return receiptData;
       } catch (error) {
@@ -151,22 +188,19 @@ async function processFilesBatch(fileNames: string[]): Promise<ReceiptData[]> {
     })
   );
 
-  // 成功した結果のみを返す
   return batchResults
-    .filter((result): result is PromiseFulfilledResult<ReceiptData> => result.status === 'fulfilled')
+    .filter((result): result is PromiseFulfilledResult<InternalReceiptData> => result.status === 'fulfilled')
     .map(result => result.value);
 }
 
-export const analyzeReceipts = async (): Promise<ReceiptData[]> => {
-  // ファイル名の配列を生成
+export const analyzeReceipts = async (outputDir: string): Promise<ReceiptData[]> => {
   const fileNames = Array.from(
     { length: maxFiles },
     (_, i) => `${dirName}/${i + 1}.pdf`
   );
 
-  // ファイル名をバッチサイズで分割
   const batches = chunk(fileNames, BATCH_SIZE);
-  const allResults: ReceiptData[] = [];
+  const allResults: InternalReceiptData[] = [];
 
   console.log(`Starting processing ${fileNames.length} files in ${batches.length} batches...`);
 
@@ -174,10 +208,9 @@ export const analyzeReceipts = async (): Promise<ReceiptData[]> => {
     console.log(`Processing batch ${i + 1}/${batches.length}`);
     const startTime = Date.now();
 
-    const batchResults = await processFilesBatch(batches[i]);
+    const batchResults = await processFilesBatch(batches[i], outputDir);
     allResults.push(...batchResults);
 
-    // バッチ間でレートリミットを適用
     const elapsedTime = Date.now() - startTime;
     if (elapsedTime < RATE_LIMIT_WINDOW && i < batches.length - 1) {
       const waitTime = RATE_LIMIT_WINDOW - elapsedTime;
@@ -186,15 +219,14 @@ export const analyzeReceipts = async (): Promise<ReceiptData[]> => {
     }
   }
 
-  return allResults;
+  // 最終的な結果からfile_nameを除外して返す
+  return allResults.map(({ file_name, ...rest }) => rest);
 }
 
-// メイン実行部分
-analyzeReceipts()
+analyzeReceipts(outputDir)
   .then(results => {
     console.log('All processing completed!');
     console.log('Total processed files:', results.length);
-    console.log('Results:', JSON.stringify(results, null, 2));
   })
   .catch(error => {
     console.error('Fatal error:', error);

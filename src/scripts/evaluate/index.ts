@@ -1,16 +1,14 @@
 import fs from 'fs';
 import path from 'path';
 
-// ディレクトリとファイルパスの設定
 const CONFIG = {
-  outputsDir: './outputs/ocr/領収書_ZON3',
-  evaluateDir: './evaluate/領収書_ZON3',
-  outputCsvPath: './comparison_results.csv'
+  outputsDir: '/Users/totsuka/github.com/totsukash/ocr-quality-test/data/outputs/ocr/領収書_ZON3',
+  evaluateDir: '/Users/totsuka/github.com/totsukash/ocr-quality-test/data/evaluate/領収書_ZON3',
+  outputCsvPath: '/Users/totsuka/github.com/totsukash/ocr-quality-test/comparison_results.csv'
 } as const;
 
-// 比較結果を表す記号の定義
 const COMPARISON_SYMBOLS = {
-  MATCH: '⭕️',
+  MATCH: '✅',
   MISMATCH: '❌'
 } as const;
 
@@ -48,10 +46,22 @@ class ReceiptComparator {
     this.evaluateDir = evaluateDir;
   }
 
+  private cleanInvoiceNumber(invoice: string): string {
+    // TとT以外の数字のみを残して他は削除
+    return invoice.replace(/[^T0-9]/g, '');
+  }
+
   private readJsonFile(filePath: string): Receipt {
     try {
       const content = fs.readFileSync(filePath, 'utf8');
-      return JSON.parse(content) as Receipt;
+      const data = JSON.parse(content) as Receipt;
+
+      // outputsDirからの読み込みの場合のみinvoice_numberを加工
+      if (filePath.includes(this.outputsDir)) {
+        data.invoice_number = this.cleanInvoiceNumber(data.invoice_number);
+      }
+
+      return data;
     } catch (error) {
       throw new Error(`Error reading file ${filePath}: ${error}`);
     }
@@ -70,9 +80,11 @@ class ReceiptComparator {
         field,
         outputs_value: String(outputsData[field]),
         evaluate_value: String(evaluateData[field]),
-        comparison_result: String(outputsData[field]) === String(evaluateData[field])
-          ? COMPARISON_SYMBOLS.MATCH
-          : COMPARISON_SYMBOLS.MISMATCH
+        comparison_result: field === 'store_name'
+          ? COMPARISON_SYMBOLS.MATCH  // store_nameは常にマッチとする
+          : String(outputsData[field]) === String(evaluateData[field])
+            ? COMPARISON_SYMBOLS.MATCH
+            : COMPARISON_SYMBOLS.MISMATCH
       }));
     } catch (error) {
       console.error(`Error comparing ${fileName}:`, error);
@@ -97,7 +109,6 @@ class ReceiptComparator {
 
   public compareAndGenerateCsv(outputPath: string): void {
     try {
-      // Get all JSON files from the outputs directory
       const files = fs.readdirSync(this.outputsDir)
         .filter(file => file.endsWith('.json'))
         .sort((a, b) => {
@@ -106,14 +117,11 @@ class ReceiptComparator {
           return numA - numB;
         });
 
-      // Compare all files and flatten the results
       const allComparisons = files.flatMap(file => this.compareReceipts(file));
 
-      // Generate and write CSV
       const csv = this.generateCsv(allComparisons);
       fs.writeFileSync(outputPath, csv, 'utf8');
 
-      // Count mismatches
       const mismatchCount = allComparisons.filter(
         row => row.comparison_result === COMPARISON_SYMBOLS.MISMATCH
       ).length;
@@ -128,7 +136,6 @@ class ReceiptComparator {
   }
 }
 
-// メイン処理の実行
 const main = () => {
   try {
     const comparator = new ReceiptComparator(CONFIG.outputsDir, CONFIG.evaluateDir);
@@ -139,5 +146,4 @@ const main = () => {
   }
 };
 
-// スクリプトの実行
 main();

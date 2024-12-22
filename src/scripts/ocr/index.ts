@@ -12,27 +12,29 @@ const project = 'omni-workspace-develop';
 const location = 'us-central1';
 const textModel = "gemini-1.5-pro-002";
 const bucketName = "test-taxbiz-ocr";
-const name = "領収書_ZON3";
+const name = "領収書_SEED1";
 const dirName = `${name}/receipt`;
 const outputDir = `/Users/totsuka/github.com/totsukash/ocr-quality-test/data/outputs/ocr/${name}`;
 const maxFiles = 100;
-const BATCH_SIZE = 50;
+const BATCH_SIZE = 40;
 const RATE_LIMIT_WINDOW = 60000;
 
 const vertexAI = new VertexAI({ project: project, location: location });
 
 interface JournalEntry {
-  取引日: string;
-  借方勘定科目: string;
-  貸方勘定科目: string;
-  借方税区分: string;
-  貸方税区分: string;
-  借方金額: string;
-  貸方金額: string;
-  摘要: string;
-  取引先: string;
-  登録番号: string;
+  "取引日": string;
+  "借方勘定科目": string;
+  "貸方勘定科目": string;
+  "借方税区分": string;
+  "貸方税区分": string;
+  "借方金額": string;
+  "貸方金額": string;
+  "摘要": string;
+  "取引先": string;
+  "登録番号": string;
   "8%対象金額": string;
+  "10%対象金額": string;
+  "非課税額": string;
 }
 
 // JSONとして出力される形式
@@ -69,17 +71,58 @@ const inferenceByGemini = async (fileName: string): Promise<string> => {
         items: {
           type: SchemaType.OBJECT,
           properties: {
-            取引日: { type: SchemaType.STRING },
-            借方勘定科目: { type: SchemaType.STRING },
-            貸方勘定科目: { type: SchemaType.STRING },
-            借方税区分: { type: SchemaType.STRING },
-            貸方税区分: { type: SchemaType.STRING },
-            借方金額: { type: SchemaType.STRING },
-            貸方金額: { type: SchemaType.STRING },
-            摘要: { type: SchemaType.STRING },
-            取引先: { type: SchemaType.STRING },
-            登録番号: { type: SchemaType.STRING },
-            "8%対象金額": { type: SchemaType.STRING },
+            "取引日": {
+              type: SchemaType.STRING,
+              description: "日付"
+            },
+            "借方勘定科目": {
+              type: SchemaType.STRING,
+              description: "借方勘定科目"
+            },
+            "貸方勘定科目": {
+              type: SchemaType.STRING,
+              description: "貸方勘定科目"
+            },
+            "借方税区分": {
+              type: SchemaType.STRING,
+              description: "借方税区分"
+            },
+            "貸方税区分": {
+              type: SchemaType.STRING,
+              description: "貸方税区分"
+            },
+            "借方金額": {
+              type: SchemaType.STRING,
+              description: "借方金額"
+            },
+            "貸方金額": {
+              type: SchemaType.STRING,
+              description: "貸方金額"
+            },
+            "摘要": {
+              type: SchemaType.STRING,
+              description: "摘要"
+            },
+            "取引先": {
+              type: SchemaType.STRING,
+              description: "取引先"
+            },
+            "登録番号": {
+              type: SchemaType.STRING,
+              description: "登録番号(必ずTから始まる番号)"
+            },
+            "8%対象金額": {
+              type: SchemaType.STRING,
+              description: "8%対象金額"
+            },
+            "10%対象金額": {
+              type: SchemaType.STRING,
+              description: "10%対象金額"
+            },
+            "非課税楽": {
+              type: SchemaType.STRING,
+              description: "非課税額"
+            },
           },
           required: ["取引日", "借方勘定科目", "貸方勘定科目", "借方税区分", "貸方税区分", "借方金額", "貸方金額", "摘要", "登録番号", "8%対象金額"],
         },
@@ -109,6 +152,28 @@ const inferenceByGemini = async (fileName: string): Promise<string> => {
   return result.response.candidates![0].content.parts[0].text;
 }
 
+function correctInvoiceNumber(invoiceNumber: string): string {
+  // 空文字列やundefinedの場合はそのまま返す
+  if (!invoiceNumber) {
+    return invoiceNumber;
+  }
+
+  // 先頭が1で始まる場合、1をTに置換
+  if (invoiceNumber.startsWith('1')) {
+    invoiceNumber = 'T' + invoiceNumber.slice(1);
+  }
+
+  // "T1" で始まり、かつ残りの数字が13桁以上ある場合、T直後の1を除去
+  if (invoiceNumber.startsWith('T1')) {
+    const remainingDigits = invoiceNumber.slice(2).replace(/\D/g, '');
+    if (remainingDigits.length >= 13) {
+      invoiceNumber = 'T' + invoiceNumber.slice(2);
+    }
+  }
+
+  return invoiceNumber;
+}
+
 function transformToReceiptData(jsonContent: string, fileName: string): InternalReceiptData {
   try {
     const journalEntries: JournalEntry[] = JSON.parse(jsonContent);
@@ -124,13 +189,16 @@ function transformToReceiptData(jsonContent: string, fileName: string): Internal
 
     const formattedDate = entry.取引日.replace(/\//g, '-');
 
+    // 登録番号の修正を適用
+    const correctedInvoiceNumber = correctInvoiceNumber(entry.登録番号);
+
     return {
       date: formattedDate,
       store_name: entry.取引先,
       total_amount: totalAmount,
       tax_8_amount: tax8Amount,
       tax_10_amount: tax10Amount,
-      invoice_number: entry.登録番号,
+      invoice_number: correctedInvoiceNumber,
       file_name: fileName
     };
   } catch (error) {

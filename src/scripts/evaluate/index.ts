@@ -3,23 +3,23 @@ import path from 'path';
 
 const dirNames = [
   '領収書_SEED1',
-  '領収書_SEED2',
-  '領収書_SEED3',
-  '領収書_ZON2',
-  '領収書_ZON3',
-  '領収書_ZON4',
-  '領収書_あさの1',
-  '領収書_あさの2',
-  '領収書_あさの3',
-  '領収書_あさの4',
-  '領収書_えびす1',
-  '領収書_えびす2',
-  '領収書_おもてなし1',
-  '領収書_おもてなし2',
-  '領収書_おもてなし3',
-  '領収書_アジョブ1',
-  '領収書_アジョブ2',
-  '領収書_アレックス2',
+  // '領収書_SEED2',
+  // '領収書_SEED3',
+  // '領収書_ZON2',
+  // '領収書_ZON3',
+  // '領収書_ZON4',
+  // '領収書_あさの1',
+  // '領収書_あさの2',
+  // '領収書_あさの3',
+  // '領収書_あさの4',
+  // '領収書_えびす1',
+  // '領収書_えびす2',
+  // '領収書_おもてなし1',
+  // '領収書_おもてなし2',
+  // '領収書_おもてなし3',
+  // '領収書_アジョブ1',
+  // '領収書_アジョブ2',
+  // '領収書_アレックス2',
 ];
 
 const CONFIG = {
@@ -141,20 +141,23 @@ class ReceiptComparator {
 
 
       const allComparisons = files.flatMap(file => this.compareReceipts(file));
+      const matchCount = allComparisons.filter(row => row.comparison_result === COMPARISON_SYMBOLS.MATCH).length;
+      const totalCount = allComparisons.length;
+      const percentage = totalCount > 0 ? ((matchCount / totalCount) * 100).toFixed(2) : '0.00';
 
       const timestamp = new Date().toLocaleString('ja-JP', {
-        year: 'numeric',
+        year: '2-digit',
         month: '2-digit',
         day: '2-digit',
         hour: '2-digit',
         minute: '2-digit',
-      }).replace(/\//g, '').replace(/ /g, '_').replace(/:/g, '');
+      }).replace(/\//g, '').replace(/ /g, '').replace(/:/g, '');
 
       const outputDir = path.join(outputBaseDir, dirName);
       if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
       }
-      const outputPath = path.join(outputDir, `${timestamp}.csv`);
+      const outputPath = path.join(outputDir, `${timestamp}_${percentage}.csv`);
 
       const csv = this.generateCsv(allComparisons);
       fs.writeFileSync(outputPath, csv, 'utf8');
@@ -166,6 +169,7 @@ class ReceiptComparator {
       console.log(`Comparison complete for ${dirName}. CSV file written to: ${outputPath}`);
       console.log(`Total files processed: ${files.length}`);
       console.log(`Total differences found: ${mismatchCount}`);
+      console.log(`Match percentage: ${percentage}%`);
     } catch (error) {
       console.error(`Error during comparison for ${dirName}:`, error);
       throw error;

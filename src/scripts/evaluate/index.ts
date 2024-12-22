@@ -1,9 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 
+const dirName = '領収書_SEED3';
+
 const CONFIG = {
-  outputsDir: '/Users/totsuka/github.com/totsukash/ocr-quality-test/data/outputs/ocr/領収書_ZON3',
-  evaluateDir: '/Users/totsuka/github.com/totsukash/ocr-quality-test/data/evaluate/領収書_ZON3',
+  outputsDir: `/Users/totsuka/github.com/totsukash/ocr-quality-test/data/outputs/ocr/${dirName}`,
+  evaluateDir: `/Users/totsuka/github.com/totsukash/ocr-quality-test/data/evaluate/${dirName}`,
   outputCsvPath: '/Users/totsuka/github.com/totsukash/ocr-quality-test/comparison_results.csv'
 } as const;
 

@@ -7,6 +7,7 @@
     "build": "tsc",
     "separate": "ts-node src/scripts/separate/index.ts",
     "ocr": "ts-node src/scripts/ocr/index.ts",
+    "openai": "ts-node src/scripts/openai/index.ts",
     "evaluate": "ts-node src/scripts/evaluate/index.ts",
     "export_csv": "ts-node src/scripts/export_csv/index.ts",
     "output": "ts-node src/scripts/output/index.ts"
@@ -29,6 +30,7 @@
     "@google/generative-ai": "^0.21.0",
     "dotenv": "^16.4.5",
     "jsdom": "^25.0.1",
+    "openai": "^4.76.3",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^4.8.69"
   }

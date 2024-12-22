@@ -1,25 +1,14 @@
 import path from 'path';
-import { SchemaType } from "@google/generative-ai";
 import dotenv from 'dotenv';
-import { journalPrompt } from "./prompt";
 import fs from 'fs/promises';
+import OpenAI from 'openai';
+import { journalPrompt } from "./prompt";
 
 dotenv.config({ path: path.join(__dirname, '../../../.env') });
 
-const { VertexAI } = require('@google-cloud/vertexai');
-
-const project = 'omni-workspace-develop';
-const location = 'us-central1';
-const textModel = "gemini-1.5-pro-002";
-const bucketName = "test-taxbiz-ocr";
-const name = "領収書_聖礼会3";
-const dirName = `${name}/receipt`;
-const outputDir = `/Users/totsuka/github.com/totsukash/ocr-quality-test/data/outputs/ocr/${name}`;
-const maxFiles = 100;
-const BATCH_SIZE = 50;
-const RATE_LIMIT_WINDOW = 60000;
-
-const vertexAI = new VertexAI({ project: project, location: location });
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
 
 interface JournalEntry {
   取引日: string;
@@ -35,7 +24,6 @@ interface JournalEntry {
   "8%対象金額": string;
 }
 
-// JSONとして出力される形式
 interface ReceiptData {
   date: string;
   store_name: string;
@@ -45,68 +33,44 @@ interface ReceiptData {
   invoice_number: string;
 }
 
-// 内部処理用の拡張インターフェース
 interface InternalReceiptData extends ReceiptData {
   file_name: string;
 }
 
-function chunk<T>(array: T[], size: number): T[][] {
-  return Array.from(
-    { length: Math.ceil(array.length / size) },
-    (_, i) => array.slice(i * size, i * size + size)
-  );
+async function encodeImage(imagePath: string): Promise<string> {
+  const imageBuffer = await fs.readFile(imagePath);
+  return imageBuffer.toString('base64');
 }
 
-const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+async function inferenceByOpenAI(filePath: string, prompt: string, temperature: number = 1): Promise<string> {
+  try {
+    const base64Image = await encodeImage(filePath);
 
-const inferenceByGemini = async (fileName: string): Promise<string> => {
-  const generativeModel = vertexAI.getGenerativeModel({
-    model: textModel,
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: SchemaType.ARRAY,
-        items: {
-          type: SchemaType.OBJECT,
-          properties: {
-            取引日: { type: SchemaType.STRING },
-            借方勘定科目: { type: SchemaType.STRING },
-            貸方勘定科目: { type: SchemaType.STRING },
-            借方税区分: { type: SchemaType.STRING },
-            貸方税区分: { type: SchemaType.STRING },
-            借方金額: { type: SchemaType.STRING },
-            貸方金額: { type: SchemaType.STRING },
-            摘要: { type: SchemaType.STRING },
-            取引先: { type: SchemaType.STRING },
-            登録番号: { type: SchemaType.STRING },
-            "8%対象金額": { type: SchemaType.STRING },
-          },
-          required: ["取引日", "借方勘定科目", "貸方勘定科目", "借方税区分", "貸方税区分", "借方金額", "貸方金額", "摘要", "登録番号", "8%対象金額"],
-        },
-      },
-    },
-  });
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: prompt },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:image/jpeg;base64,${base64Image}`
+              }
+            }
+          ]
+        }
+      ],
+      max_tokens: 500,
+      temperature: temperature
+    });
 
-  const gsUrl = `gs://${bucketName}/${fileName}`;
-
-  const textPart = {
-    text: journalPrompt,
-  };
-  const filePart = {
-    fileData: {
-      fileUri: gsUrl,
-      mimeType: "application/pdf",
-    },
-  };
-  const request = {
-    contents: [{
-      role: "user",
-      parts: [filePart, textPart],
-    }],
-  };
-
-  const result = await generativeModel.generateContent(request);
-  return result.response.candidates![0].content.parts[0].text;
+    return response.choices[0].message.content || '';
+  } catch (error) {
+    console.error('Error in OpenAI inference:', error);
+    throw error;
+  }
 }
 
 function transformToReceiptData(jsonContent: string, fileName: string): InternalReceiptData {
@@ -146,7 +110,6 @@ async function saveReceiptToJson(receipt: InternalReceiptData, outputDir: string
     const fileNumber = path.basename(receipt.file_name, '.pdf');
     const outputPath = path.join(outputDir, `${fileNumber}.json`);
 
-    // file_nameを除外したデータを保存
     const { file_name, ...receiptDataWithoutFileName } = receipt;
 
     await fs.writeFile(
@@ -161,12 +124,16 @@ async function saveReceiptToJson(receipt: InternalReceiptData, outputDir: string
   }
 }
 
-async function processFilesBatch(fileNames: string[], outputDir: string): Promise<InternalReceiptData[]> {
+async function processFilesBatch(
+  fileNames: string[],
+  outputDir: string,
+  prompt: string
+): Promise<InternalReceiptData[]> {
   const batchResults = await Promise.allSettled(
     fileNames.map(async fileName => {
       try {
         console.log(`Processing file: ${fileName}`);
-        const jsonContent = await inferenceByGemini(fileName);
+        const jsonContent = await inferenceByOpenAI(fileName, prompt);
         const receiptData = transformToReceiptData(jsonContent, fileName);
 
         await saveReceiptToJson(receiptData, outputDir);
@@ -185,13 +152,29 @@ async function processFilesBatch(fileNames: string[], outputDir: string): Promis
     .map(result => result.value);
 }
 
-export const analyzeReceipts = async (outputDir: string): Promise<ReceiptData[]> => {
+function chunk<T>(array: T[], size: number): T[][] {
+  return Array.from(
+    { length: Math.ceil(array.length / size) },
+    (_, i) => array.slice(i * size, i * size + size)
+  );
+}
+
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+export async function analyzeReceipts(
+  dirPath: string,
+  outputDir: string,
+  prompt: string,
+  maxFiles: number = 100,
+  batchSize: number = 50,
+  rateLimitWindow: number = 60000
+): Promise<ReceiptData[]> {
   const fileNames = Array.from(
     { length: maxFiles },
-    (_, i) => `${dirName}/${i + 1}.pdf`
+    (_, i) => path.join(dirPath, `${i + 1}.pdf`)
   );
 
-  const batches = chunk(fileNames, BATCH_SIZE);
+  const batches = chunk(fileNames, batchSize);
   const allResults: InternalReceiptData[] = [];
 
   console.log(`Starting processing ${fileNames.length} files in ${batches.length} batches...`);
@@ -200,22 +183,26 @@ export const analyzeReceipts = async (outputDir: string): Promise<ReceiptData[]>
     console.log(`Processing batch ${i + 1}/${batches.length}`);
     const startTime = Date.now();
 
-    const batchResults = await processFilesBatch(batches[i], outputDir);
+    const batchResults = await processFilesBatch(batches[i], outputDir, prompt);
     allResults.push(...batchResults);
 
     const elapsedTime = Date.now() - startTime;
-    if (elapsedTime < RATE_LIMIT_WINDOW && i < batches.length - 1) {
-      const waitTime = RATE_LIMIT_WINDOW - elapsedTime;
+    if (elapsedTime < rateLimitWindow && i < batches.length - 1) {
+      const waitTime = rateLimitWindow - elapsedTime;
       console.log(`Waiting ${waitTime}ms before next batch...`);
       await wait(waitTime);
     }
   }
 
-  // 最終的な結果からfile_nameを除外して返す
   return allResults.map(({ file_name, ...rest }) => rest);
 }
 
-analyzeReceipts(outputDir)
+// Usage example
+const prompt = journalPrompt;
+const dirPath = "/Users/totsuka/github.com/totsukash/ocr-quality-test/data/original/separate/領収書_ZON3/receipt";
+const outputDir = "/Users/totsuka/github.com/totsukash/ocr-quality-test/data/outputs/ocr/領収書_ZON3";
+
+analyzeReceipts(dirPath, outputDir, prompt)
   .then(results => {
     console.log('All processing completed!');
     console.log('Total processed files:', results.length);

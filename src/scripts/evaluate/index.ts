@@ -6,7 +6,7 @@ const dirName = '領収書_SEED3';
 const CONFIG = {
   outputsDir: `/Users/totsuka/github.com/totsukash/ocr-quality-test/data/outputs/ocr/${dirName}`,
   evaluateDir: `/Users/totsuka/github.com/totsukash/ocr-quality-test/data/evaluate/${dirName}`,
-  outputCsvPath: '/Users/totsuka/github.com/totsukash/ocr-quality-test/comparison_results.csv'
+  outputCsvPath: `/Users/totsuka/github.com/totsukash/ocr-quality-test/data/compare_results/${dirName}.csv`
 } as const;
 
 const COMPARISON_SYMBOLS = {

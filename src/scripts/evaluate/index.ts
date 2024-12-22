@@ -2,8 +2,8 @@ import fs from 'fs';
 import path from 'path';
 
 const dirNames = [
-  '領収書_SEED1',
-  // '領収書_SEED2',
+  // '領収書_SEED1',
+  '領収書_SEED2',
   // '領収書_SEED3',
   // '領収書_ZON2',
   // '領収書_ZON3',

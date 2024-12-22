@@ -12,12 +12,12 @@ const project = 'omni-workspace-develop';
 const location = 'us-central1';
 const textModel = "gemini-1.5-pro-002";
 const bucketName = "test-taxbiz-ocr";
-const name = "領収書_SEED1";
+const name = "領収書_SEED2";
 const dirName = `${name}/receipt`;
 const outputDir = `/Users/totsuka/github.com/totsukash/ocr-quality-test/data/outputs/ocr/${name}`;
 const maxFiles = 100;
 const BATCH_SIZE = 40;
-const RATE_LIMIT_WINDOW = 60000;
+const RATE_LIMIT_WINDOW = 70000;
 
 const vertexAI = new VertexAI({ project: project, location: location });
 

@@ -79,7 +79,7 @@ async function separatePDF(config: SeparationConfig) {
 }
 
 // 使用例
-const fileName = '領収書_聖礼会3'
+const fileName = '領収書_ZON4'
 const config: SeparationConfig = {
   inputPath: path.join(__dirname, `../../../data/original/${fileName}.pdf`),
   outputBasePath: path.join(__dirname, `../../../data/original/separate/${fileName}`),

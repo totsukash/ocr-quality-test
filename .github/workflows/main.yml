@@ -1,27 +1,25 @@
-name: CodeGuru Security Example
+name: Security Scan with PR Comments
 on:
-  push:
-    branches:
-      - 'main'
+  pull_request:
+    branches: [ main ]
 
 permissions:
   id-token: write
-  # for writing security events.
   security-events: write
-  # only required for workflows in private repositories
   actions: read
   contents: read
+  pull-requests: write  # PRへのコメント権限を追加
 
 jobs:
-  build:
+  security-scan:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Respository
+      - name: Checkout Repository
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      - name: Configure aws credentials
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
           role-to-assume: arn:aws:iam::980921732235:role/CodeGuruSecurityGitHubAccessRole
@@ -34,14 +32,30 @@ jobs:
           source_path: .
           aws_region: us-east-1
           fail_on_severity: Critical
-      - name: Print findings
-        run: |
-          ls -l
-          cat codeguru-security-results.sarif.json
 
-      # If you want content in security scanning, you’ll need to enable codescanning by going into github.
-      # https://docs.github.com/en/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-code-scanning-for-a-repository
-      - name: Upload result
+      # SARIFファイルをGitHub Security Alertsにアップロード
+      - name: Upload SARIF results
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: codeguru-security-results.sarif.json
+          category: codeguru-security
+
+      # 結果を解析してPRにコメント
+      - name: Comment PR
+        if: github.event_name == 'pull_request'
+        run: |
+          # SARIFファイルを解析してコメント用のテキストを生成
+          FINDINGS=$(jq -r '.runs[].results[] | "- **" + .level + "**: " + .message.text + " at `" + .locations[0].physicalLocation.artifactLocation.uri + ":" + (.locations[0].physicalLocation.region.startLine | tostring) + "`"' codeguru-security-results.sarif.json)
+          
+          if [ -n "$FINDINGS" ]; then
+            COMMENT="## CodeGuru Security Findings\n\n$FINDINGS\n\nPlease review these security issues before merging."
+          
+            # GitHub APIを使用してPRにコメント
+            curl -X POST \
+              -H "Authorization: token ${{ github.token }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+              -d "{\"body\":\"$COMMENT\"}"
+          else
+            echo "No security findings to report."
+          fi

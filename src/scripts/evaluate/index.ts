@@ -3,9 +3,9 @@ import path from 'path';
 
 const dirNames = [
   // '領収書_SEED1',
-  // '領収書_SEED2',
+  '領収書_SEED2',
   '領収書_SEED3',
-  // '領収書_ZON2',
+  '領収書_ZON2',
   // '領収書_ZON3',
   // '領収書_ZON4',
   // '領収書_あさの1',
@@ -157,7 +157,7 @@ class ReceiptComparator {
       if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
       }
-      const outputPath = path.join(outputDir, `${timestamp}_${percentage}.csv`);
+      const outputPath = path.join(outputDir, `${timestamp}_${percentage}_${dirName}.csv`);
 
       const csv = this.generateCsv(allComparisons);
       fs.writeFileSync(outputPath, csv, 'utf8');
